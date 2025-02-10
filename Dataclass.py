@@ -5,9 +5,362 @@ from dacite import from_dict, Config
 from typing import Any, List, Dict
 import numpy as np
 from ataraxis_base_utilities import console, ensure_directory_exists
+import yaml
 
 
+@dataclass
+class Main:
+    """Global settings defining basic imaging parameters."""
 
+    nplanes: int = 1
+    """Number of imaging planes in each TIFF file sequence."""
+
+    nchannels: int = 1
+    """Number of channels per imaging plane."""
+
+    functional_chan: int = 1
+    """Channel used for extracting functional ROIs (1-based indexing, e.g., 1 means the first channel)."""
+
+    tau: float = 1.0
+    """Sensor time constant in seconds, used for computing the deconvolution kernel."""
+
+    force_sktiff: bool = False
+    """If True, force the use of scikit-image for reading TIFF files."""
+
+    fs: float = 10.0
+    """Sampling rate per plane in Hertz."""
+
+    do_bidiphase: bool = False
+    """Enable computation of bidirectional phase offset for misaligned line scanning (applies to two-photon
+    recordings only)."""
+
+    bidiphase: int = 0
+    """User-specified bidirectional phase offset for line scanning experiments."""
+
+    bidi_corrected: bool = False
+    """Indicates whether bidirectional phase correction has been applied."""
+
+    frames_include: int = -1
+    """If greater than zero, only process that many frames; if negative, process all frames."""
+
+    multiplane_parallel: bool = False
+    """Enable parallel processing of multiplane data on server environments if set to True."""
+
+    ignore_flyback: List[int] = field(default_factory=list)
+    """List of plane indices to ignore as flyback planes that typically contain no valid imaging data."""
+
+@dataclass
+class FileIO:
+    """File input/output settings for specifying data file locations, formats, and output storage options."""
+
+    fast_disk: List[str] = field(default_factory=list)
+    """List of paths for fast disks where temporary binary files will be stored."""
+
+    delete_bin: bool = False
+    """If True, delete the binary file created during the registration stage after processing."""
+
+    mesoscan: bool = False
+    """Indicates whether the input file is a ScanImage Mesoscope recording."""
+
+    bruker: bool = False
+    """Indicates whether the provided TIFF files are single-page BRUKER TIFFs."""
+
+    bruker_bidirectional: bool = False
+    """Specifies whether BRUKER files are bidirectional multiplane recordings."""
+
+    h5py: List[str] = field(default_factory=list)
+    """List of paths to h5py files that will be used as inputs."""
+
+    h5py_key: str = "data"
+    """Key used to access the data array in an h5py file."""
+
+    nwb_file: str = ""
+    """Path to the NWB file used as input."""
+
+    nwb_driver: str = ""
+    """Location or name of the driver for reading the NWB file."""
+
+    nwb_series: str = ""
+    """Name of the TwoPhotonSeries in the NWB file to retrieve data from."""
+
+    save_path0: List[str] = field(default_factory=list)
+    """List of directory paths where the pipeline results should be saved."""
+
+    save_folder: List[str] = field(default_factory=list)
+    """List of folder names under which the results should be stored."""
+
+    look_one_level_down: bool = False
+    """If True, search for TIFF files in the subfolders one level down."""
+
+    subfolders: List[str] = field(default_factory=list)
+    """List of specific subfolder names to search through for TIFF files."""
+
+    move_bin: bool = False
+    """If True and the 'fast_disk' differs from the save directory, move the binary file to the save directory 
+    after processing."""
+
+@dataclass
+class Output:
+    """Output settings defining the format and organization of the processing results."""
+
+    preclassify: float = 0.0
+    """Probability threshold for pre-classification of cells before signal extraction."""
+
+    save_nwb: bool = False
+    """If True, save the output as an NWB file."""
+
+    save_mat: bool = False
+    """If True, save the results in MATLAB format (e.g., Fall.mat)."""
+
+    combined: bool = True
+    """If True, combine results across planes into a separate 'combined' folder at the end of processing."""
+
+    aspect: float = 1.0
+    """Pixel-to-micron ratio (X:Y) for correctly displaying the image aspect ratio in the GUI (not used in 
+    processing)."""
+
+    report_time: bool = True
+    """If True, return a dictionary reporting the processing time for each plane."""
+
+@dataclass
+class Registration:
+    """Rigid registration settings used for correcting motion artifacts between frames."""
+
+    do_registration: bool = True
+    """Enable the registration process to correct for motion."""
+
+    align_by_chan: int = 1
+    """Channel to use for alignment (1-based index, typically the functional channel)."""
+
+    nimg_init: int = 300
+    """Number of frames used to compute the reference image for registration."""
+
+    batch_size: int = 500
+    """Number of frames to register simultaneously in each batch."""
+
+    maxregshift: float = 0.1
+    """Maximum allowed shift during registration as a fraction of the frame size (e.g., 0.1 indicates 10%)."""
+
+    smooth_sigma: float = 1.15
+    """Standard deviation (in pixels) of the Gaussian used to smooth the phase correlation between the reference
+    image and the current frame."""
+
+    smooth_sigma_time: float = 0.0
+    """Standard deviation (in frames) of the Gaussian used to temporally smooth the data before computing 
+    phase correlation."""
+
+    keep_movie_raw: bool = False
+    """If True, keep the binary file of the raw (non-registered) frames."""
+
+    two_step_registration: bool = False
+    """If True, perform a two-step registration (initial registration followed by refinement) for 
+    low signal-to-noise data."""
+
+    reg_tif: bool = False
+    """If True, write the registered binary data to TIFF files."""
+
+    reg_tif_chan2: bool = False
+    """If True, generate TIFF files for the registered non-functional (channel 2) data."""
+
+    subpixel: int = 10
+    """Precision for subpixel registration (defines 1/subpixel steps)."""
+
+    th_badframes: float = 1.0
+    """Threshold for excluding poor-quality frames when performing cropping."""
+
+    norm_frames: bool = True
+    """Normalize frames during shift detection to improve registration accuracy."""
+
+    force_refImg: bool = False
+    """If True, force the use of a pre-stored reference image for registration."""
+
+    pad_fft: bool = False
+    """If True, pad the image during FFT-based registration to reduce edge effects."""
+
+@dataclass
+class OnePRegistration:
+    """One-photon registration settings including spatial high-pass filtering and edge tapering."""
+
+    one_p_reg: bool = False
+    """If True, apply high-pass spatial filtering and tapering to improve one-photon image registration."""
+
+    spatial_hp_reg: int = 42
+    """Window size in pixels for spatial high-pass filtering before registration."""
+
+    pre_smooth: float = 0.0
+    """Standard deviation for Gaussian smoothing applied before spatial high-pass filtering 
+    (applied only if > 0)."""
+
+    spatial_taper: float = 40.0
+    """Number of pixels to ignore at the image edges to reduce edge artifacts during registration."""
+
+@dataclass
+class NonRigid:
+    """Non-rigid registration settings used to correct for local deformations and motion."""
+
+    nonrigid: bool = True
+    """Enable non-rigid registration to correct for local motion and deformation."""
+
+    block_size: List[int] = field(default_factory=lambda: [128, 128])
+    """Block size in pixels for non-rigid registration, defining the dimensions of subregions used in 
+    the correction."""
+
+    snr_thresh: float = 1.2
+    """Signal-to-noise ratio threshold: the phase correlation peak must be this many times higher than the 
+    noise level to accept the block shift."""
+
+    maxregshiftNR: float = 5.0
+    """Maximum allowed shift in pixels for each block relative to the rigid registration shift."""
+
+@dataclass
+class ROIDetection:
+    """ROI detection and extraction settings for identifying cells and their activity signals."""
+
+    roidetect: bool = True
+    """Enable ROI detection and subsequent signal extraction."""
+
+    sparse_mode: bool = True
+    """Use sparse mode for cell detection, which is well-suited for data with sparse signals."""
+
+    spatial_scale: int = 0
+    """Optimal spatial scale (in pixels) of the recording to adjust detection sensitivity."""
+
+    connected: bool = True
+    """Require detected ROIs to be fully connected regions."""
+
+    threshold_scaling: float = 1.0
+    """Scaling factor for the detection threshold, controlling how distinctly ROIs stand out from 
+    background noise."""
+
+    spatial_hp_detect: int = 25
+    """Window size in pixels for spatial high-pass filtering applied before neuropil subtraction during 
+    ROI detection."""
+
+    max_overlap: float = 0.75
+    """Maximum allowed fraction of overlapping pixels between ROIs; ROIs exceeding this overlap 
+    will be discarded."""
+
+    high_pass: int = 100
+    """Window size in frames for running mean subtraction over time to remove low-frequency drift."""
+
+    smooth_masks: bool = True
+    """Smooth the ROI masks in the final pass of cell detection if set to True."""
+
+    max_iterations: int = 20
+    """Maximum number of iterations allowed for cell extraction."""
+
+    nbinned: int = 5000
+    """Maximum number of binned frames to use for ROI detection to speed up processing."""
+
+    denoise: bool = False
+    """If True, denoise the binned movie before cell detection in sparse mode to enhance performance."""
+
+@dataclass
+class CellposeDetection:
+    """Settings for cell detection using the Cellpose algorithm."""
+
+    anatomical_only: int = 0
+    """Mode for cell detection:
+        0: Standard mode.
+        1: Detect masks on the max projection divided by the mean image.
+        2: Detect masks on the mean image.
+        3: Detect masks on the enhanced mean image.
+        4: Detect masks on the max projection image.
+    """
+
+    diameter: int = 0
+    """Expected cell diameter (in pixels) to adjust the detection scale in Cellpose."""
+
+    cellprob_threshold: float = 0.0
+    """Threshold for cell probability in Cellpose, used to filter out low-confidence detections."""
+
+    flow_threshold: float = 1.5
+    """Flow threshold in Cellpose that controls sensitivity to cell boundaries."""
+
+    spatial_hp_cp: int = 0
+    """Window size in pixels for spatial high-pass filtering applied to the image before Cellpose processing."""
+
+    pretrained_model: str = "cyto"
+    """Pretrained model used by Cellpose. Can be a built-in model name (e.g., 'cyto') or a path to 
+    a custom model."""
+
+@dataclass
+class SignalExtraction:
+    """Settings for extracting fluorescence signals from ROIs and surrounding neuropil regions."""
+
+    neuropil_extract: bool = True
+    """If True, extract neuropil signals for background correction."""
+
+    allow_overlap: bool = False
+    """If True, allow pixels to be used in the signal extraction for multiple ROIs (typically False to 
+    avoid contamination)."""
+
+    min_neuropil_pixels: int = 350
+    """Minimum number of pixels required to compute the neuropil signal for each cell."""
+
+    inner_neuropil_radius: int = 2
+    """Number of pixels to leave as a gap between the ROI and the surrounding neuropil region to avoid 
+    signal bleed-over."""
+
+    lam_percentile: int = 50
+    """Percentile used to exclude the brightest pixels when computing the neuropil signal."""
+
+@dataclass
+class SpikeDeconvolution:
+    """Settings for deconvolving calcium signals to infer spike trains."""
+
+    spikedetect: bool = True
+    """If True, perform spike deconvolution to convert calcium signals into estimated spike trains."""
+
+    neucoeff: float = 0.7
+    """Neuropil coefficient applied for signal correction before deconvolution."""
+
+    baseline: str = "maximin"
+    """Method to compute the baseline of each trace (e.g., 'maximin', 'mean')."""
+
+    win_baseline: float = 60.0
+    """Time window (in seconds) used for the maximin filter to compute the baseline."""
+
+    sig_baseline: float = 10.0
+    """Standard deviation (in seconds) of the Gaussian filter applied to smooth the baseline signal."""
+
+    prctile_baseline: int = 8
+    """Percentile used to determine the baseline level of each trace (typically a low percentile reflecting 
+    minimal activity)."""
+
+@dataclass
+class Classification:
+    """Settings for classifying detected ROIs as real cells or artifacts."""
+
+    soma_crop: bool = True
+    """If True, crop dendritic regions from detected ROIs to focus on the cell body for classification purposes."""
+
+    use_builtin_classifier: bool = False
+    """If True, use the built-in classifier for cell detection."""
+
+    classifier_path: str = ""
+    """Path to a custom classifier file if not using the built-in classifier."""
+
+@dataclass
+class Channel2:
+    """Settings for processing the second channel in multi-channel datasets."""
+
+    chan2_thres: int = 0
+    """Threshold for considering an ROI as detected in the second channel."""
+
+@dataclass
+class Miscellaneous:
+    """Miscellaneous settings and metadata, including version information."""
+
+    suite2p_version: str = ""
+    """Version of the Suite2p pipeline used, which aids in reproducibility and documentation."""
+
+""" Nested class for extra configuration parameters.
+    This field is intended to store extra subfields that exist in the input file
+    but are not defined in the default MyConfig schema."""
+@dataclass
+class Extra:
+    fields: Dict[str, Any] = field(default_factory=dict)
 
 @dataclass
 class UniConfig:
@@ -54,7 +407,7 @@ class UniConfig:
             json.dump(instance_data, json_file)
 
     @classmethod
-    def from_json(cls, file_path: Path) -> "JsonConfig":
+    def from_json(cls, file_path: Path) -> "UniConfig":
         """
         Instantiates the class using data loaded from the provided .json file.
 
@@ -120,7 +473,7 @@ class UniConfig:
         np.save(file_path, instance_data)
 
     @classmethod
-    def from_npy(cls, file_path: Path) -> "NpyConfig":
+    def from_npy(cls, file_path: Path) -> "UniConfig":
         """
         Instantiates the class using data loaded from the provided .npy file.
 
@@ -158,9 +511,101 @@ class UniConfig:
         instance = from_dict(data_class=cls, data=config_dict, config=class_config)
         return instance
 
+    def to_yaml(self, file_path: Path) -> None:
+        """Converts the class instance to a dictionary and saves it as a .yml (YAML) file at the provided path.
+
+        This method is designed to dump the class data into an editable .yaml file. This allows storing the data in
+        non-volatile memory and manually editing the data between save / load cycles.
+
+        Args:
+            file_path: The path to the .yaml file to write. If the file does not exist, it will be created, alongside
+                any missing directory nodes. If it exists, it will be overwritten (re-created). The path has to end
+                with a '.yaml' or '.yml' extension suffix.
+
+        Raises:
+            ValueError: If the output path does not point to a file with a '.yaml' or '.yml' extension.
+        """
+        # Defines YAML formatting options. The purpose of these settings is to make YAML blocks more readable when
+        # being edited offline.
+        yaml_formatting = {
+            "default_style": "",  # Use single or double quotes for scalars as needed
+            "default_flow_style": False,  # Use block style for mappings
+            "indent": 10,  # Number of spaces for indentation
+            "width": 200,  # Maximum line width before wrapping
+            "explicit_start": True,  # Mark the beginning of the document with ___
+            "explicit_end": True,  # Mark the end of the document with ___
+            "sort_keys": False,  # Preserves the order of the keys as written by creators
+        }
+
+        # Ensures that the output file path points to a .yaml (or .yml) file
+        if file_path.suffix != ".yaml" and file_path.suffix != ".yml":
+            message: str = (
+                f"Invalid file path provided when attempting to write the YamlConfig class instance to a yaml file. "
+                f"Expected a path ending in the '.yaml' or '.yml' extension, but encountered {file_path}. Provide a "
+                f"path that uses the correct extension."
+            )
+            console.error(message=message, error=ValueError)
+
+        # Ensures that the output directory exists. Co-opts a method used by Console class to ensure log file directory
+        # exists.
+        # noinspection PyProtectedMember
+        ensure_directory_exists(file_path)
+
+        # Writes the data to a .yaml file using custom formatting defined at the top of this method.
+        with open(file_path, "w") as yaml_file:
+            yaml.dump(data=asdict(self), stream=yaml_file, **yaml_formatting)  # type: ignore
+
+    @classmethod
+    def from_yaml(cls, file_path: Path) -> "UniConfig":
+        """Instantiates the class using the data loaded from the provided .yaml (YAML) file.
+
+        This method is designed to re-initialize dataclasses from the data stored in non-volatile memory as .yaml / .yml
+        files. The method uses dacite, which adds support for complex nested configuration class structures.
+
+        Notes:
+            This method disables built-in dacite type-checking before instantiating the class. Therefore, you may need
+            to add explicit type-checking logic for the resultant class instance to verify it was instantiated
+            correctly.
+
+        Args:
+            file_path: The path to the .yaml file to read the class data from.
+
+        Returns:
+            A new dataclass instance created using the data read from the .yaml file.
+
+        Raises:
+            ValueError: If the provided file path does not point to a .yaml or .yml file.
+        """
+        # Ensures that config_path points to a .yaml / .yml file.
+        if file_path.suffix != ".yaml" and file_path.suffix != ".yml":
+            message: str = (
+                f"Invalid file path provided when attempting to create the YamlConfig class instance from a yaml file. "
+                f"Expected a path ending in the '.yaml' or '.yml' extension, but encountered {file_path}. Provide a "
+                f"path that uses the correct extension."
+            )
+            console.error(message=message, error=ValueError)
+
+        # Disables built-in dacite type-checking
+        class_config = Config(check_types=False)
+
+        # Opens and reads the .yaml file. Note, safe_load may not work for reading python tuples, so it is advised
+        # to avoid using tuple in configuration files.
+        with open(file_path) as yml_file:
+            data = yaml.safe_load(yml_file)
+
+        # Converts the imported data to a python dictionary.
+        config_dict: dict[Any, Any] = dict(data)
+
+        # Uses dacite to instantiate the class using the imported dictionary. This supports complex nested structures
+        # and basic data validation.
+        instance = from_dict(data_class=cls, data=config_dict, config=class_config)
+
+        # Uses the imported dictionary to instantiate a new class instance and returns it to caller.
+        return instance
+
 
 @dataclass
-class MyConfig:
+class MyConfig(UniConfig):
     """
     A configuration class with a hierarchical structure using nested classes.
     You can access configuration items like:
@@ -168,146 +613,6 @@ class MyConfig:
         config.file_io.save_folder
     """
 
-    @dataclass
-    class Main:
-        nplanes: int = 1  # Each tiff has this many planes in sequence.
-        nchannels: int = 1  # Each tiff has this many channels per plane.
-        functional_chan: int = 1  # This channel is used to extract functional ROIs (1-based, so 1 means first channel, and 2 means second channel).
-        tau: float = 1.0  # The timescale of the sensor (in seconds), used for deconvolution kernel.
-        force_sktiff: bool = False  # Specifies whether or not to use scikit-image for reading in tiffs.
-        fs: float = 10.0  # Sampling rate (per plane).
-        do_bidiphase: bool = False  # Whether or not to compute bidirectional phase offset from misaligned line scanning experiment (applies to 2P recordings only).
-        bidiphase: int = 0  # bidirectional phase offset from line scanning (set by user).
-        bidi_corrected: bool = False  # Specifies whether to do bidi correction.
-        frames_include: int = -1  # If greater than zero, only frames_include frames are processed.
-        multiplane_parallel: bool = False  # Specifies whether or not to run pipeline on server.
-        ignore_flyback: List[int] = field(default_factory=list)  # Specifies which planes will be ignored as flyback planes by the pipeline.
-
-    @dataclass
-    class FileIO:
-        fast_disk: List[str] = field(default_factory=list)  # Specifies location where temporary binary file will be stored.
-        delete_bin: bool = False  # Specifies whether to delete binary file created during registration stage.
-        mesoscan: bool = False  # Specifies whether file being read in is a scanimage mesoscope recording.
-        bruker: bool = False  # Specifies whether provided tif files are single page BRUKER tiffs.
-        bruker_bidirectional: bool = False  # Specifies whether BRUKER files are bidirectional multiplane recordings.
-        h5py: List[str] = field(default_factory=list)  # Specifies path to h5py file that will be used as inputs.
-        h5py_key: str = "data"  # Key used to access data array in h5py file.
-        nwb_file: str = ""  # Specifies path to NWB file you use to use as input.
-        nwb_driver: str = ""  # Location of driver for NWB file.
-        nwb_series: str = ""  # Name of TwoPhotonSeries values you wish to retrieve from your NWB file.
-        save_path0: List[str] = field(default_factory=list)  # List containing pathname of where you’d like to save your pipeline results.
-        save_folder: List[str] = field(default_factory=list)  # List containing directory name you’d like results to be saved under.
-        look_one_level_down: bool = False  # Specifies whether to look in all subfolders when searching for tiffs.
-        subfolders: List[str] = field(default_factory=list)  # Specifies subfolders you’d like to look through.
-        move_bin: bool = False  #  If True and ops['fast_disk'] is different from ops[save_disk], the created binary file is moved to ops['save_disk'].
-
-    @dataclass
-    class Output:
-        preclassify: float = 0.0  # Apply classifier before signal extraction with probability threshold of “preclassify”.
-        save_nwb: bool = False  # Whether to save output as NWB file.
-        save_mat: bool = False  # Whether to save the results in matlab format in file “Fall.mat”.
-        combined: bool = True  # Combine results across planes in separate folder “combined” at end of processing.
-        aspect: float = 1.0  # Ratio of um/pixels in X to um/pixels in Y (ONLY for correct aspect ratio in GUI, not used for other processing).
-        report_time: bool = True  #  whether or not to return a timing dictionary for each plane.
-
-    @dataclass
-    class Registration:
-        do_registration: bool = True  # Whether or not to run registration.
-        align_by_chan: int = 1  # Which channel to use for alignment (1-based, so 1 means 1st channel and 2 means 2nd channel).
-        nimg_init: int = 300  # How many frames to use to compute reference image for registration.
-        batch_size: int = 500  # How many frames to register simultaneously in each batch.
-        maxregshift: float = 0.1  # The maximum shift as a fraction of the frame size.
-        smooth_sigma: float = 1.15  # Standard deviation in pixels of the gaussian used to smooth the phase correlation between the reference image and the frame which is being registered.
-        smooth_sigma_time: float = 0.0  # Standard deviation in time frames of the gaussian used to smooth the data before phase correlation is computed.
-        keep_movie_raw: bool = False  # Whether or not to keep the binary file of the non-registered frames.
-        two_step_registration: bool = False  # Whether or not to run registration twice (for low SNR data).
-        reg_tif: bool = False  # Whether or not to write the registered binary to tiff files.
-        reg_tif_chan2: bool = False  # Whether or not to write the registered binary of the non-functional channel to tiff files.
-        subpixel: int = 10  # Precision of Subpixel Registration (1/subpixel steps).
-        th_badframes: float = 1.0  # Involved with setting threshold for excluding frames for cropping.
-        norm_frames: bool = True  # Normalize frames when detecting shifts.
-        force_refImg: bool = False  # Specifies whether to use refImg stored in ops.
-        pad_fft: bool = False  # Specifies whether to pad image or not during FFT portion of registration.
-
-    @dataclass
-    class OnePRegistration:
-        one_p_reg: bool = False  # Whether to perform high-pass spatial filtering and tapering.
-        spatial_hp_reg: int = 42  # Window in pixels for spatial high-pass filtering before registration.
-        pre_smooth: float = 0.0  # If > 0, defines stddev of Gaussian smoothing, which is applied before spatial high-pass filtering.
-        spatial_taper: float = 40.0  # How many pixels to ignore on edges.
-
-    @dataclass
-    class NonRigid:
-        nonrigid: bool = True  # Whether or not to perform non-rigid registration.
-        block_size: List[int] = field(default_factory=lambda: [128, 128])  # Size of blocks for non-rigid registration, in pixels.
-        snr_thresh: float = 1.2  # How big the phase correlation peak has to be relative to the noise in the phase correlation map for the block shift to be accepted.
-        maxregshiftNR: float = 5.0  # Maximum shift in pixels of a block relative to the rigid shift.
-
-    @dataclass
-    class ROIDetection:
-        roidetect: bool = True  # Whether or not to run ROI detect and extraction.
-        sparse_mode: bool = True  # Whether or not to use sparse_mode cell detection.
-        spatial_scale: int = 0  # What the optimal scale of the recording is in pixels.
-        connected: bool = True  # Whether or not to require ROIs to be fully connected.
-        threshold_scaling: float = 1.0  # This controls the threshold at which to detect ROIs (how much the ROIs have to stand out from the noise to be detected).
-        spatial_hp_detect: int = 25  # Window for spatial high-pass filtering for neuropil subtracation before ROI detection takes place.
-        max_overlap: float = 0.75  # After detection, ROIs with more than ops[‘max_overlap’] fraction of their pixels overlapping with other ROIs will be discarded.
-        high_pass: int = 100  # Running mean subtraction across time with window of size ‘high_pass’.
-        smooth_masks: bool = True  # Whether to smooth masks in final pass of cell detection.
-        max_iterations: int = 20  # How many iterations over which to extract cells - at most ops[‘max_iterations’].
-        nbinned: int = 5000  # Maximum number of binned frames to use for ROI detection.
-        denoise: bool = False  #  Whether or not binned movie should be denoised before cell detection in sparse_mode.
-
-    @dataclass
-    class CellposeDetection:
-        anatomical_only: int = 0  # Whether or not binned movie should be denoised before cell detection in sparse_mode.
-                                  # 1: Will find masks on max projection image divided by mean image.
-                                  # 2: Will find masks on mean image.
-                                  # 3: Will find masks on enhanced mean image.
-                                  # 4: Will find masks on maximum projection image.
-        diameter: int = 0  # Diameter that will be used for cellpose.
-        cellprob_threshold: float = 0.0  # Specifies threshold for cell detection that will be used by cellpose.
-        flow_threshold: float = 1.5  # Specifies flow threshold that will be used for cellpose.
-        spatial_hp_cp: int = 0  # Window for spatial high-pass filtering of image to be used for cellpose.
-        pretrained_model: str = "cyto"  # Path to pretrained model or string for model type (can be user’s model ).
-
-    @dataclass
-    class SignalExtraction:
-        neuropil_extract: bool = True  # Whether or not to extract signal from neuropil.
-        allow_overlap: bool = False  # Whether or not to extract signals from pixels which belong to two ROIs.
-        min_neuropil_pixels: int = 350  # Minimum number of pixels used to compute neuropil for each cell.
-        inner_neuropil_radius: int = 2  # Number of pixels to keep between ROI and neuropil donut.
-        lam_percentile: int = 50  # Percentile of Lambda within area to ignore when excluding cell pixels for neuropil extraction.
-
-    @dataclass
-    class SpikeDeconvolution:
-        spikedetect: bool = True  # Whether or not to run spike_deconvolution.
-        neucoeff: float = 0.7  # Neuropil coefficient for all ROIs.
-        baseline: str = "maximin"  # How to compute the baseline of each trace.
-        win_baseline: float = 60.0  # Window for maximin filter in seconds.
-        sig_baseline: float = 10.0  # Gaussian filter width in seconds.
-        prctile_baseline: int = 8  # Percentile of trace to use as baseline.
-
-    @dataclass
-    class Classification:
-        soma_crop: bool = True  # Specifies whether to crop dendrites for cell classification stats.
-        use_builtin_classifier: bool = False  # Specifies whether or not to use built-in classifier for cell detection.
-        classifier_path: str = ""  #  Path to classifier file you want to use for cell classification.
-
-    @dataclass
-    class Channel2:
-        chan2_thres: int = 0  # Threshold for calling an ROI “detected” on a second channel.
-
-    @dataclass
-    class Miscellaneous:
-        suite2p_version: str = ""  # Specifies version of suite2p pipeline that was run with these settings.
-
-    # Nested class for extra configuration parameters.
-    # This field is intended to store extra subfields that exist in the input file
-    # but are not defined in the default MyConfig schema.
-    @dataclass
-    class Extra:
-        fields: Dict[str, Any] = field(default_factory=dict)
 
     # Define the instances of each nested settings class as fields
     main: Main = field(default_factory=Main)
@@ -329,8 +634,8 @@ class MyConfig:
 
 # Tset Example
 def main():
-    input_file = Path("")
-    output_file = Path("")
+    input_file = Path("ops.json")
+    output_file = Path("test.json")
 
     try:
         config = MyConfig.from_json(input_file)
@@ -338,7 +643,7 @@ def main():
         print(f"loading error：{e}")
         return
 
-    config.main.nplanes = config.nplanes + 1
+    config.main.nplanes = config.main.nplanes + 1
 
     try:
         config.to_json(output_file)
